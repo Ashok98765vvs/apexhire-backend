@@ -243,7 +243,7 @@ app.post('/api/auth/login', async (req, res) => {
   res.json({ 
     user: { id: result.rows[0].id, email: result.rows[0].email, name: result.rows[0].name, plan: result.rows[0].plan },
     token 
-n  });
+  });
 });
 
 // Get fresh jobs (last 24 hours)
