@@ -7,7 +7,15 @@ const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const app = express();
-app.use(cors());
+
+// CORS - FIXED: Allow your Netlify frontend
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || '*',
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
+
 app.use(express.json());
 
 // Database setup (PostgreSQL)
@@ -235,7 +243,7 @@ app.post('/api/auth/login', async (req, res) => {
   res.json({ 
     user: { id: result.rows[0].id, email: result.rows[0].email, name: result.rows[0].name, plan: result.rows[0].plan },
     token 
-  });
+n  });
 });
 
 // Get fresh jobs (last 24 hours)
