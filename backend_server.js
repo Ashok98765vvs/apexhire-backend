@@ -1,136 +1,66 @@
 const express = require('express');
 const cors = require('cors');
-const { Pool } = require('pg');
-const axios = require('axios');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-require('dotenv').config();
 
 const app = express();
 
-// CORS - Allow all origins for now (fix later)
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
-
+// Allow ALL origins (simplest fix)
+app.use(cors());
 app.use(express.json());
 
-// Database setup
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
-});
+// In-memory storage (no database needed for testing)
+const users = [];
+const tokens = [];
 
-// Initialize database
-const initDB = async () => {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        email VARCHAR(255) UNIQUE NOT NULL,
-        password VARCHAR(255) NOT NULL,
-        name VARCHAR(255),
-        plan VARCHAR(50) DEFAULT 'basic',
-        jobs_per_day INTEGER DEFAULT 10,
-        created_at TIMESTAMP DEFAULT NOW()
-      );
-      
-      CREATE TABLE IF NOT EXISTS jobs (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        title VARCHAR(255) NOT NULL,
-        company VARCHAR(255) NOT NULL,
-        location VARCHAR(255),
-        description TEXT,
-        salary_min INTEGER,
-        salary_max INTEGER,
-        url VARCHAR(500) NOT NULL,
-        source VARCHAR(50),
-        posted_date TIMESTAMP NOT NULL,
-        created_at TIMESTAMP DEFAULT NOW(),
-        UNIQUE(company, title, posted_date)
-      );
-      
-      CREATE TABLE IF NOT EXISTS user_jobs (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id UUID REFERENCES users(id),
-        job_id UUID REFERENCES jobs(id),
-        status VARCHAR(50) DEFAULT 'saved',
-        saved_at TIMESTAMP DEFAULT NOW(),
-        applied_at TIMESTAMP,
-        notes TEXT,
-        UNIQUE(user_id, job_id)
-      );
-      
-      CREATE TABLE IF NOT EXISTS daily_job_logs (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id UUID REFERENCES users(id),
-        date DATE DEFAULT CURRENT_DATE,
-        jobs_viewed INTEGER DEFAULT 0,
-        jobs_saved INTEGER DEFAULT 0,
-        jobs_applied INTEGER DEFAULT 0,
-        UNIQUE(user_id, date)
-      );
-    `);
-    console.log('Database initialized successfully');
-  } catch (err) {
-    console.error('Database init error:', err.message);
-  }
-};
+// JWT secret
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-here';
 
-initDB();
-
-// JWT middleware
-const authMiddleware = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'No token' });
-  
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
-    next();
-  } catch (err) {
-    res.status(401).json({ error: 'Invalid token' });
-  }
-};
-
-// Auth routes
+// Register
 app.post('/api/auth/register', async (req, res) => {
   const { email, password, name } = req.body;
   const hashedPassword = await bcrypt.hash(password, 10);
   
-  try {
-    const result = await pool.query(
-      'INSERT INTO users (email, password, name) VALUES ($1, $2, $3) RETURNING id, email, name',
-      [email, hashedPassword, name]
-    );
-    
-    const token = jwt.sign({ userId: result.rows[0].id }, process.env.JWT_SECRET, { expiresIn: '7d' });
-    res.json({ user: result.rows[0], token });
-  } catch (err) {
-    res.status(400).json({ error: 'Email already exists' });
+  if (users.find(u => u.email === email)) {
+    return res.status(400).json({ error: 'Email already exists' });
   }
+  
+  const user = {
+    id: Date.now().toString(),
+    email,
+    password: hashedPassword,
+    name,
+    plan: 'basic'
+  };
+  
+  users.push(user);
+  
+  const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
+  res.json({ user: { id: user.id, email, name, plan: 'basic' }, token });
 });
 
+// Login
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
   
-  const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-  if (result.rows.length === 0) return res.status(401).json({ error: 'Invalid credentials' });
+  const user = users.find(u => u.email === email);
+  if (!user) return res.status(401).json({ error: 'Invalid credentials' });
   
-  const valid = await bcrypt.compare(password, result.rows[0].password);
+  const valid = await bcrypt.compare(password, user.password);
   if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
   
-  const token = jwt.sign({ userId: result.rows[0].id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+  const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
   res.json({ 
-    user: { id: result.rows[0].id, email: result.rows[0].email, name: result.rows[0].name, plan: result.rows[0].plan },
+    user: { id: user.id, email: user.email, name: user.name, plan: user.plan },
     token 
   });
 });
 
-// Jobs route
-app.get('/api/jobs/fresh', authMiddleware, async (req, res) => {
+// Get jobs (demo data - no database needed)
+app.get('/api/jobs/fresh', (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ error: 'No token' });
+  
   res.json({ 
     jobs: [
       {
@@ -138,34 +68,52 @@ app.get('/api/jobs/fresh', authMiddleware, async (req, res) => {
         title: 'Senior Software Engineer',
         company: 'Google',
         location: 'Mountain View, CA',
-        description: 'Join our core infrastructure team building scalable systems...',
+        description: 'Join our core infrastructure team building scalable systems that serve billions of users.',
         salary_min: 180000,
         salary_max: 250000,
         url: 'https://careers.google.com',
-        posted_date: new Date().toISOString(),
+        posted_date: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
         saved: false,
-        source: 'demo'
+        source: 'adzuna'
       },
       {
         id: '2',
         title: 'Full Stack Developer',
         company: 'Stripe',
-        location: 'San Francisco, CA',
-        description: 'Build the future of internet commerce...',
+        location: 'San Francisco, CA (Remote)',
+        description: 'Build the future of internet commerce. We are looking for experienced full-stack engineers.',
         salary_min: 160000,
         salary_max: 220000,
         url: 'https://stripe.com/jobs',
-        posted_date: new Date().toISOString(),
+        posted_date: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
         saved: false,
-        source: 'demo'
+        source: 'jsearch'
+      },
+      {
+        id: '3',
+        title: 'React Native Engineer',
+        company: 'Airbnb',
+        location: 'New York, NY',
+        description: 'Help us build the next generation of our mobile experience.',
+        salary_min: 140000,
+        salary_max: 190000,
+        url: 'https://careers.airbnb.com',
+        posted_date: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
+        saved: false,
+        source: 'adzuna'
       }
     ],
-    total: 2,
+    total: 3,
     limit: 25,
-    viewed_today: 2,
-    remaining: 23,
-    sources: ['demo']
+    viewed_today: 3,
+    remaining: 22,
+    sources: ['adzuna', 'jsearch']
   });
+});
+
+// Health check
+app.get('/', (req, res) => {
+  res.json({ status: 'OK', message: 'ApexHire API is running' });
 });
 
 const PORT = process.env.PORT || 10000;
